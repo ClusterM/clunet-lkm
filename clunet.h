@@ -31,7 +31,17 @@
 #define CLUNET_OFFSET_COMMAND 2
 #define CLUNET_OFFSET_SIZE 3
 #define CLUNET_OFFSET_DATA 4
+
 #define CLUNET_BROADCAST_ADDRESS 255
+
+#define MAX_OPENED_FILES 64
+#define RECEIVER_BUFFER_SIZE 4096
+
+struct cfile_t {
+    int id;
+    char receiver_buffer[RECEIVER_BUFFER_SIZE];
+    u64 receiver_write_pos;
+};
 
 static int clunet_init(void);
 static void clunet_free(void);
