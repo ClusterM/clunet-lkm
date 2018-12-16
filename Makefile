@@ -5,3 +5,6 @@ all:
 
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+
+install: all
+	cp -f clunet.ko /lib/modules/$(shell uname -r)/
