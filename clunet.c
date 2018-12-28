@@ -121,6 +121,7 @@ static void clunet_data_received(const uint8_t prio, const uint8_t src_address, 
     {
         for (i = 0; i < clunet_bus_number_opens; i++)
         {
+            if (!(opened_files[i]->f_mode & FMODE_READ)) continue;
             d_address = ((struct cfile_t*)opened_files[i]->private_data)->device_address;
             if ((d_address < 0) // bus devices
                 || ((src_address == d_address) // source address matched
@@ -234,14 +235,14 @@ static irq_handler_t clunet_irq_handler(unsigned int irq, void *dev_id, struct p
                                 in_buffer[CLUNET_OFFSET_COMMAND],
                                 in_buffer[CLUNET_OFFSET_SIZE]);
                     }
-                    
+
                     /* Иначе если пакет не прочитан и буфер не закончился - подготовимся к чтению следующего байта */
                     else if (clunet_reading_current_byte < CLUNET_READ_BUFFER_SIZE)
                     {
                         clunet_reading_current_bit = 0;
                         in_buffer[clunet_reading_current_byte] = 0;
                     }
-                    
+
                     /* Иначе - нехватка приемного буфера -> игнорируем пакет */
                     else
                     {
@@ -284,9 +285,8 @@ static irq_handler_t clunet_irq_handler(unsigned int irq, void *dev_id, struct p
 /* Таймер */
 static enum hrtimer_restart send_timer_callback(struct hrtimer *timer)
 {
-    if (!clunet_sending_state) return HRTIMER_NORESTART; // Nothing to do
     /* Если достигли фазы завершения передачи, то завершим ее и освободим передатчик */
-    if (clunet_sending_state == CLUNET_SENDING_STATE_DONE)
+    if (!clunet_sending_state || clunet_sending_state == CLUNET_SENDING_STATE_DONE)
     {
         clunet_sending_state = CLUNET_SENDING_STATE_IDLE;        // Указываем, что передатчик свободен
         clunet_set_line(0);                        // Отпускаем линию
@@ -301,12 +301,12 @@ static enum hrtimer_restart send_timer_callback(struct hrtimer *timer)
     else
     {
         clunet_set_line(!clunet_sending);    // Инвертируем значение сигнала
-        
+
         /* Если отпустили линию, то запланируем время паузы перед следующей передачей длительностью 1Т */
         if (!clunet_sending)
         {
             set_send_timer(CLUNET_T);
-        }    
+        }
         /* Если прижали линию к земле, то запланируем время передачи сигнала в зависимости от текущей фазы передачи */
         /* Фаза передачи данных */
         else if (clunet_sending_state == CLUNET_SENDING_STATE_DATA)
@@ -340,6 +340,9 @@ static enum hrtimer_restart send_timer_callback(struct hrtimer *timer)
                 set_send_timer((clunet_sending_priority & 1) ? CLUNET_0_T : CLUNET_1_T);
                 clunet_sending_current_byte = clunet_sending_current_bit = 0;    // Готовим счётчики передачи данных
                 break;
+            default:
+                clunet_set_line(0);
+                printk(KERN_ERR "CLUNET unknown sending state: %d\n", clunet_sending_state);
             }
     }
 
@@ -366,14 +369,14 @@ static void clunet_send(const uint8_t src_address, const uint8_t dst_address, co
         out_buffer[CLUNET_OFFSET_DST_ADDRESS] = dst_address;
         out_buffer[CLUNET_OFFSET_COMMAND] = command;
         out_buffer[CLUNET_OFFSET_SIZE] = size;
-        
+
         /* Копируем данные в буфер */
         for (i = 0; i < size; i++)
             out_buffer[CLUNET_OFFSET_DATA + i] = data[i];
 
         /* Добавляем контрольную сумму */
         out_buffer[CLUNET_OFFSET_DATA + size] = check_crc((char*)out_buffer, CLUNET_OFFSET_DATA + size);
-        
+
         clunet_sending_data_length = size + (CLUNET_OFFSET_DATA + 1);
 
         // Если линия свободна, то запланируем передачу сразу
@@ -482,6 +485,7 @@ static ssize_t clunet_dev_write(struct file *filep, const char *buffer, size_t l
         if (ch == '\n')
         {
             l = ((struct cfile_t*)filep->private_data)->transmitter_write_pos;
+            if (!l) break; // Empty line? Skip it.
             decoded = kmalloc(l / 2 + 1, GFP_KERNEL);
             if (!decoded)
                 return -ENOMEM;
