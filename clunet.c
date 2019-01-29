@@ -13,10 +13,6 @@
 #include <linux/string.h>
 #include "clunet.h"
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Cluster");
-MODULE_DESCRIPTION("CLUNET driver");
-
 /* Module parameters */
 static u8 receive_pin = 2;
 static u8 transmit_pin = 3;
@@ -739,6 +735,10 @@ static void __exit clunet_exit(void)
     clunet_free();
     pr_info("CLUNET: stopped\n");
 }
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Alexey 'Cluster' Avdyukhin <clusterrr@clusterrr.com>");
+MODULE_DESCRIPTION("CLUNET bus driver");
 
 module_init(clunet_init);
 module_exit(clunet_exit);
