@@ -117,7 +117,7 @@ static void clunet_data_received(
     /* 'P SR DS CM DATA\n0' */
     buffer = kmalloc(2 + 3 + 3 + 3 + size * 2 + 1 + 1, GFP_ATOMIC);
     if (!buffer) {
-        printk(KERN_ERR "CLUNET: can't allocatate memory");
+        pr_err("CLUNET: can't allocatate memory");
         return;
     }
     sprintf(buffer, "%d %02X %02X %02X ",
@@ -125,9 +125,7 @@ static void clunet_data_received(
     for (i = 0; i < size; i++)
         sprintf(buffer + 2 + 3 + 3 + 3 + i*2, "%02X", data[i]);
     strcat(buffer, "\n");
-#ifdef CLUNET_DEBUG
-    printk(KERN_DEBUG "CLUNET received: %s", buffer);
-#endif
+    pr_debug("CLUNET received: %s", buffer);
     p = 0;
     while (buffer[p]) {
         for (i = 0; i < clunet_bus_number_opens; i++) {
@@ -188,7 +186,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
             && ticks >= CLUNET_IDLE_TIMEOUT_T
            ) { /* Timeout */
             clunet_reading_state = CLUNET_READING_STATE_IDLE;
-            printk(KERN_WARNING "CLUNET recv timeout\n");
+            pr_warning("CLUNET recv timeout\n");
         }
         if (clunet_sending_state && !clunet_sending) { /* Collision */
             /* Stop transmission and wait for line */
@@ -242,7 +240,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
                             );
                         } else { /* CRC check */
                             /* CRC error, lets print error to kernel log */
-                            printk(KERN_WARNING "CLUNET CRC error: prio %d from %02X to %02X cmd %02X size %d\n",
+                            pr_warning("CLUNET CRC error: prio %d from %02X to %02X cmd %02X size %d\n",
                                 clunet_reading_priority,
                                 in_buffer[CLUNET_OFFSET_SRC_ADDRESS],
                                 in_buffer[CLUNET_OFFSET_DST_ADDRESS],
@@ -259,7 +257,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
                     /* Buffer overflow, discaring data */
                     else {
                         clunet_reading_state = CLUNET_READING_STATE_IDLE;
-                        printk(KERN_ERR "CLUNET out of revc buffer\n");
+                        pr_err("CLUNET out of revc buffer\n");
                     }
                 }
                 break;
@@ -364,7 +362,7 @@ static enum hrtimer_restart send_timer_callback(struct hrtimer *timer)
             default:
                 /* Something weird happen */
                 clunet_set_line(0);
-                printk(KERN_ERR "CLUNET unknown sending state: %d\n",
+                pr_err("CLUNET unknown sending state: %d\n",
                     clunet_sending_state);
             }
         }
@@ -597,7 +595,7 @@ static int __init clunet_init(void)
     /* Allocate and init the timer */
     data_send_timer = kzalloc(sizeof(struct hrtimer), GFP_KERNEL);
     if (!data_send_timer) {
-        printk(KERN_ERR "CLUNET: can't allocate memory for timer\n");
+        pr_err("CLUNET: can't allocate memory for timer\n");
         clunet_free();
         return -1;
     }
@@ -606,7 +604,7 @@ static int __init clunet_init(void)
     /* Allocate the receiver pin */
     receive_pin_desc = gpio_to_desc(receive_pin);
     if (IS_ERR(receive_pin_desc)) {
-        printk(KERN_ERR "CLUNET: receive_pin gpiod_request error: %ld\n", PTR_ERR(receive_pin_desc));
+        pr_err("CLUNET: receive_pin gpiod_request error: %ld\n", PTR_ERR(receive_pin_desc));
         clunet_free();
         return -1;
     }
@@ -614,7 +612,7 @@ static int __init clunet_init(void)
     /* Allocate the transmitter pin */
     transmit_pin_desc = gpio_to_desc(transmit_pin);
     if (IS_ERR(transmit_pin_desc)) {
-        printk(KERN_ERR "CLUNET: transmit_pin gpiod_request error: %ld\n", PTR_ERR(transmit_pin_desc));
+        pr_err("CLUNET: transmit_pin gpiod_request error: %ld\n", PTR_ERR(transmit_pin_desc));
         clunet_free();
         return -1;
     }
@@ -632,21 +630,21 @@ static int __init clunet_init(void)
         "clunet_handler",
         NULL);
     if (r) {
-        printk(KERN_ERR "CLUNET: receive_pin request_irq error: %d\n", r);
+        pr_err("CLUNET: receive_pin request_irq error: %d\n", r);
         clunet_free();
         return -1;
     }
     /* Register the device class */
     clunet_class = class_create(THIS_MODULE, CLASS_NAME);
     if (clunet_class == NULL) {
-        printk(KERN_ERR "CLUNET: failed to register device class\n");
+        pr_err("CLUNET: failed to register device class\n");
         clunet_free();
         return -1;
     }
     /* Allocate character device region for bus (1 device) */
     r = alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME_BUS);
     if (r) {
-        printk(KERN_ERR "CLUNET: failed to allocate chrdev region: %d\n", r);
+        pr_err("CLUNET: failed to allocate chrdev region: %d\n", r);
         clunet_free();
         return -1;
     }
@@ -654,7 +652,7 @@ static int __init clunet_init(void)
     /* Create the bus device in /dev */
     clunet_bus_device = device_create(clunet_class, NULL, dev, NULL, DEVICE_NAME_BUS_FILE);
     if (clunet_bus_device == NULL) {
-        printk(KERN_ERR "CLUNET: failed to create /dev/%s\n", DEVICE_NAME_BUS_FILE);
+        pr_err("CLUNET: failed to create /dev/%s\n", DEVICE_NAME_BUS_FILE);
         clunet_free();
         return -1;
     }
@@ -663,14 +661,14 @@ static int __init clunet_init(void)
     clunet_bus_cdev.owner = THIS_MODULE;
     r = cdev_add(&clunet_bus_cdev, dev, 1);
     if (r) {
-        printk(KERN_ERR "CLUNET: failed to add chrdev: %d\n", r);
+        pr_err("CLUNET: failed to add chrdev: %d\n", r);
         clunet_free();
         return -1;
     }
     /* Allocate character device region for CLUNET devices (256 devices) */
     r = alloc_chrdev_region(&dev, 0, 256, DEVICE_NAME_CUSTOM);
     if (r) {
-        printk(KERN_ERR "CLUNET: failed to allocate chrdev region (device): %d\n", r);
+        pr_err("CLUNET: failed to allocate chrdev region (device): %d\n", r);
         clunet_free();
         return -1;
     }
@@ -680,7 +678,7 @@ static int __init clunet_init(void)
     clunet_device_cdev.owner = THIS_MODULE;
     r = cdev_add(&clunet_device_cdev, dev, 256);
     if (r) {
-        printk(KERN_ERR "CLUNET: failed to add chrdev (device): %d\n", r);
+        pr_err("CLUNET: failed to add chrdev (device): %d\n", r);
         clunet_free();
         return -1;
     }
@@ -693,7 +691,7 @@ static int __init clunet_init(void)
         NULL,
         0
     );
-    printk(KERN_INFO "CLUNET: started, major numbers: %d (bus), %d (devices), local address: 0x%02X, device name: %s\n",
+    pr_info("CLUNET: started, major numbers: %d (bus), %d (devices), local address: 0x%02X, device name: %s\n",
         clunet_bus_major, clunet_device_major, address, device_name);
     return 0;
 }
@@ -739,7 +737,7 @@ static void clunet_free(void)
 static void __exit clunet_exit(void)
 {
     clunet_free();
-    printk(KERN_INFO "CLUNET: stopped\n");
+    pr_info("CLUNET: stopped\n");
 }
 
 module_init(clunet_init);
