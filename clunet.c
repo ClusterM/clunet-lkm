@@ -24,19 +24,21 @@ static u8 transmit_value = 1;
 static u8 clunet_t = 64;
 static u8 address = 0;
 static char* device_name = "Linux CLUNET driver";
-module_param(receive_pin, byte, 0);
+module_param(receive_pin, byte, S_IRUGO);
 MODULE_PARM_DESC(receive_pin,"CLUNET receiver pin number (default 2)");
-module_param(transmit_pin, byte, 0);
+module_param(transmit_pin, byte, S_IRUGO);
 MODULE_PARM_DESC(transmit_pin,"CLUNET transmitter pin number (default 3)");
-module_param(transmit_value, byte, 0);
+module_param(transmit_value, byte, S_IRUGO);
 MODULE_PARM_DESC(transmit_value,"0 = direct send logic, 1 = inverse send logic (default 1)");
-module_param(clunet_t, byte, 0);
+module_param(clunet_t, byte, S_IRUGO);
 MODULE_PARM_DESC(clunet_t,"CLUNET bit 0 length (default 64us)");
-module_param(address, byte, 0);
+module_param(address, byte, S_IRUGO);
 MODULE_PARM_DESC(address,"Local address (default 0)");
-module_param(device_name, charp, 0);
+module_param(device_name, charp, S_IRUGO);
 MODULE_PARM_DESC(device_name,"Local device name");
 
+static struct gpio_desc* receive_pin_desc = NULL;
+static struct gpio_desc* transmit_pin_desc = NULL;
 static unsigned int irq_number = 0xffff;
 static struct class* clunet_class  = NULL;
 static struct device* clunet_bus_device = NULL;
@@ -95,7 +97,7 @@ static void set_send_timer(u16 t)
 static void clunet_set_line(u8 value)
 {
     clunet_sending = value;
-    gpio_direction_output(transmit_pin, value ? transmit_value : !transmit_value);
+    gpiod_direction_output(transmit_pin_desc, value ? transmit_value : !transmit_value);
 }
 
 static void clunet_data_received(const uint8_t prio, const uint8_t src_address, const uint8_t dst_address, const uint8_t command, char* data, const uint8_t size)
@@ -402,10 +404,9 @@ static int clunet_dev_open(struct inode *inodep, struct file *filep)
     int d_address = -1;
     if (clunet_bus_number_opens >= MAX_OPENED_FILES)
         return -EMFILE;
-    filep->private_data = kmalloc(sizeof(struct cfile_t), GFP_KERNEL);
+    filep->private_data = kzalloc(sizeof(struct cfile_t), GFP_KERNEL);
     if (!filep->private_data)
         return -ENOMEM;
-    memset(filep->private_data, 0, sizeof(struct cfile_t));
     ((struct cfile_t*)filep->private_data)->id = clunet_bus_number_opens;
     if (imajor(inodep) == clunet_device_major)
         d_address = iminor(inodep);
@@ -590,7 +591,7 @@ static int __init clunet_init(void)
     int r;
     dev_t dev;
     memset(opened_files, 0, sizeof(opened_files));
-    data_send_timer = kmalloc(sizeof(struct hrtimer), GFP_KERNEL);
+    data_send_timer = kzalloc(sizeof(struct hrtimer), GFP_KERNEL);
     if (!data_send_timer)
     {
         printk(KERN_ERR "CLUNET: can't allocate memory for timer\n");
@@ -599,25 +600,23 @@ static int __init clunet_init(void)
     }
     hrtimer_init(data_send_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     data_send_timer->function = send_timer_callback;
-    gpio_free(receive_pin);
-    r = gpio_request(receive_pin, "clunet_reciver");
-    if (r)
+    receive_pin_desc = gpio_to_desc(receive_pin);
+    if (IS_ERR(receive_pin_desc))
     {
-        printk(KERN_ERR "CLUNET: receive_pin gpio_request error: %d\n", r);
+        printk(KERN_ERR "CLUNET: receive_pin gpiod_request error: %ld\n", PTR_ERR(receive_pin_desc));
         clunet_free();
         return -1;
     }
-    gpio_direction_input(receive_pin);
-    gpio_free(transmit_pin);
-    r = gpio_request(transmit_pin, "clunet_transmitter");
-    if (r)
+    gpiod_direction_input(receive_pin_desc);
+    transmit_pin_desc = gpio_to_desc(transmit_pin);
+    if (IS_ERR(transmit_pin_desc))
     {
-        printk(KERN_ERR "CLUNET: transmit_pin gpio_request error: %d\n", r);
+        printk(KERN_ERR "CLUNET: transmit_pin gpiod_request error: %ld\n", PTR_ERR(transmit_pin_desc));
         clunet_free();
         return -1;
     }
     clunet_set_line(0);
-    irq_number = gpio_to_irq(receive_pin);
+    irq_number = gpiod_to_irq(receive_pin_desc);
     r = request_irq(irq_number,             // The interrupt number requested
                         (irq_handler_t) clunet_irq_handler, // The pointer to the handler function below
                         IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,   // Interrupt on falling edge
@@ -720,8 +719,10 @@ static void clunet_free(void)
     }
     if (irq_number != 0xffff)
         free_irq(irq_number, NULL);
-    gpio_free(receive_pin);
-    gpio_free(transmit_pin);
+    if (!IS_ERR_OR_NULL(receive_pin_desc))
+        gpiod_put(receive_pin_desc);
+    if (!IS_ERR_OR_NULL(transmit_pin_desc))
+        gpiod_put(transmit_pin_desc);
 }
 
 static void __exit clunet_exit(void)
