@@ -2,7 +2,8 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/cdev.h>
-#include <linux/gpio.h>
+#include <linux/slab.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
 #include <linux/timekeeping.h>
@@ -12,6 +13,8 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include "clunet.h"
+
+#define TIMINGS_LOG_MAX_SIZE 256
 
 /* Module parameters */
 static u8 receive_pin = 2;
@@ -113,7 +116,7 @@ static void clunet_data_received(
     /* 'P SR DS CM DATA\n0' */
     buffer = kmalloc(2 + 3 + 3 + 3 + size * 2 + 1 + 1, GFP_ATOMIC);
     if (!buffer) {
-        pr_err("CLUNET: can't allocatate memory");
+        pr_err("CLUNET: can't allocate memory");
         return;
     }
     sprintf(buffer, "%d %02X %02X %02X ",
@@ -169,19 +172,68 @@ static void clunet_data_received(
     wake_up_interruptible(&wq_data);
 }
 
+struct timings_log_entry
+{
+    u16 ticks;
+    u8 edge;
+    s8 value;
+};
+
+volatile struct timings_log_entry timings_log[TIMINGS_LOG_MAX_SIZE];
+volatile int timings_log_size = 0;
+
+void print_timings_log(void)
+{
+    int i;
+    char* buffer;
+    char tmp_buffer[16];
+    buffer = kmalloc(256, GFP_ATOMIC);
+    if (!buffer) {
+        pr_err("CLUNET: can't allocate memory");
+        return;
+    }
+    buffer[0] = 0;
+    for (i = 0; i < timings_log_size; i++)
+    {
+        volatile struct timings_log_entry* r = &timings_log[i];
+        sprintf(tmp_buffer, " %03d:%c:%03u:%d", i, r->edge ? 'r':'f', r->ticks, r->value);
+        strcat(buffer, tmp_buffer);
+        if ((((i + 1) % 10) == 0) || (i == timings_log_size - 1))
+        {
+            pr_warning("Timings:%s\n", buffer);
+            buffer[0] = 0;
+        }
+    }
+    //pr_warning("Total: %d\n", timings_log_size);
+    timings_log_size = 0;
+    kfree(buffer);
+}
+
 /* IRQ fired every rising/falling edge of receiver pin */
 static irq_handler_t clunet_irq_handler(unsigned int irq,
     void *dev_id, struct pt_regs *regs)
 {
     u64 now = ktime_to_us(ktime_get_boottime());
     u8 value = CLUNET_READING;
-    uint64_t ticks;
+    u64 ticks = 0;
     if (value && last_rising_time > 0) { /* Line is low */
         ticks = now - last_rising_time; /* Idle time */
+
+        if ((timings_log_size > 0) && (timings_log_size < TIMINGS_LOG_MAX_SIZE) && (ticks < 1000))
+        {
+            timings_log[timings_log_size].edge = value;
+            timings_log[timings_log_size].ticks = (u16)ticks;
+            timings_log[timings_log_size].value = 0;
+            timings_log_size++;
+        }
+
         if (clunet_reading_state != CLUNET_READING_STATE_IDLE 
             && ticks >= CLUNET_IDLE_TIMEOUT_T
            ) { /* Timeout */
             clunet_reading_state = CLUNET_READING_STATE_IDLE;
+
+            print_timings_log();
+
             pr_warning("CLUNET recv timeout\n");
         }
         if (clunet_sending_state && !clunet_sending) { /* Collision */
@@ -191,6 +243,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
         }
     }
     else if (!value && last_falling_time > 0) { /* Line is high */    
+
         /* Line is free trying to schedule transmission */
         if (clunet_sending_state == CLUNET_SENDING_STATE_WAITING_LINE) {
             clunet_sending_state = CLUNET_SENDING_STATE_INIT;
@@ -199,11 +252,21 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
 
         ticks = now - last_falling_time; /* Signal time calculated */
 
+        if ((timings_log_size < TIMINGS_LOG_MAX_SIZE) && (ticks < 1000))
+        {
+            timings_log[timings_log_size].edge = value;
+            timings_log[timings_log_size].ticks = (u16)ticks;
+            timings_log[timings_log_size].value = (ticks > (CLUNET_0_T + CLUNET_1_T) / 2) ? 1 : 0;
+            timings_log_size++;
+        }
+
         /* Is it initialization? (time >= 6.5T?) */
-        if (ticks >= (CLUNET_INIT_T + CLUNET_1_T) / 2)
+        if (ticks >= (CLUNET_INIT_T + CLUNET_1_T) / 2) {
             clunet_reading_state = CLUNET_READING_STATE_PRIO1;
+        }
         /* Need to check stage otherwise */
         else
+        {
             switch (clunet_reading_state) {
 
             /* Reading data */
@@ -220,6 +283,9 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
                         && (clunet_reading_current_byte > in_buffer[CLUNET_OFFSET_SIZE]
                         + CLUNET_OFFSET_DATA)) {
                         clunet_reading_state = CLUNET_READING_STATE_IDLE;
+
+                        print_timings_log();
+
                         /* Lets check CRC */
                         if (!check_crc((char*)in_buffer 
                             + CLUNET_OFFSET_SRC_ADDRESS,
@@ -280,6 +346,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
                     /* Logic 0 */
                     clunet_reading_priority = 0;
             }
+        }
     }
 
     /* Save current timestamp */
@@ -287,6 +354,7 @@ static irq_handler_t clunet_irq_handler(unsigned int irq,
         last_rising_time = now;
     else
         last_falling_time = now;
+
     /* Announce that the IRQ has been handled correctly */
     return (irq_handler_t) IRQ_HANDLED;
 }

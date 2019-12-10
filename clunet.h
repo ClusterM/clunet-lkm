@@ -11,7 +11,7 @@
 #define CLUNET_READ_BUFFER_SIZE 256
 #define CLUNET_SEND_BUFFER_SIZE 256
 
-#define CLUNET_READING !gpio_get_value(receive_pin)
+#define CLUNET_READING !gpiod_get_value(receive_pin_desc)
 
 #define CLUNET_T clunet_t
 #define CLUNET_0_T (CLUNET_T)
